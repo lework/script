@@ -892,7 +892,7 @@ cat1:                     # supervisor中配置的program名称
   initialDelaySeconds: 10 # 首次检查等待的时间(以秒为单位), 默认: 1
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
   sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
 
@@ -906,7 +906,7 @@ cat2:                     # supervisor中配置的program名称
   initialDelaySeconds: 10 # 首次检查等待的时间(以秒为单位), 默认: 1
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
   sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
 
@@ -926,7 +926,7 @@ cat3:
   timeoutSeconds: 5       # 检查超时的秒数, 默认: 3
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
   sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
 
@@ -940,7 +940,7 @@ cat4:
   timeoutSeconds: 5       # 检查超时的秒数, 默认: 3
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
   sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
 """

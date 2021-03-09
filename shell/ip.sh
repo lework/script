@@ -1,6 +1,13 @@
 #!/bin/bash
 
 
+get_ip_from_doh() {
+   local domain=${1:-www.baidu.com}
+   local dohs=(doh.defaultroutes.de dns.hostux.net uncensored.lux1.dns.nixnet.xyz dns.rubyfish.cn dns.alidns.com doh.centraleu.pi-dns.com doh.dns.sb doh-fi.blahdns.com fi.doh.dns.snopyta.org dns.flatuslifir.is doh.li dns.digitale-gesellschaft.ch)
+   ip=$(curl -4fsSLkA- -m200 "https://${dohs[$((RANDOM%10))]}/dns-query?name=${domain}" | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" |tr ' ' '\n'|grep -Ev [.]0|sort -uR|head -1)
+   echo "${domain}: ${ip}"
+}
+
 get_addr () {
     local if_name=$1
     local uri_template=$2
