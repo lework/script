@@ -4,7 +4,7 @@
 # @Time    : 2020-06-05
 # @Author  : lework
 # @Desc    : 针对supervisor的应用进行健康检查
-# @Version : 1.6
+# @Version : 1.7
 
 
 import os
@@ -69,6 +69,14 @@ def shell(cmd):
     proc.wait()
     return (proc.returncode,) + proc.communicate()
 
+def drop_cache():
+    """
+    清除缓存, 1: pagecache, 2: dentries and inodes, 3: 1+2
+    """
+    cmd = "sync && echo 1 > /proc/sys/vm/drop_caches"
+    exitcode, _, _ = shell(cmd)
+
+    return exitcode
 
 def get_proc_cpu(pid):
     """
@@ -554,6 +562,12 @@ class HealthCheck(object):
             time.sleep(1)
             info = s.supervisor.getProcessInfo(program)
 
+            drop_cache_state = drop_cache()
+            if  drop_cache_state == 0:
+                self.log(program, '[Action: restart] drop pagecache success.')
+            else:
+                self.log(program, '[Action: restart] drop pagecache error.')
+
         if info['state'] != 20:
             try:
                 start_result = s.supervisor.startProcess(program)
@@ -604,6 +618,12 @@ class HealthCheck(object):
         else:
             result = 'Failed to kill %s, pid: %s exiting: %s' % (program, pid, exitcode)
             self.log(program, "[Action: kill] result %s", result)
+
+        drop_cache_state = drop_cache()
+        if  drop_cache_state == 0:
+            self.log(program, '[Action: kill] drop pagecache success.')
+        else:
+            self.log(program, '[Action: kill] drop pagecache error.')
 
         return result
 
