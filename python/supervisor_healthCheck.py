@@ -21,6 +21,8 @@ import datetime
 import platform
 import threading
 import subprocess
+import hmac
+from hashlib import sha256
 from email.header import Header
 from email.mime.text import MIMEText
 from collections import namedtuple
@@ -69,14 +71,15 @@ def shell(cmd):
     proc.wait()
     return (proc.returncode,) + proc.communicate()
 
+
 def drop_cache():
     """
     清除缓存, 1: pagecache, 2: dentries and inodes, 3: 1+2
     """
     cmd = "sync && echo 1 > /proc/sys/vm/drop_caches"
     exitcode, _, _ = shell(cmd)
-
     return exitcode
+
 
 def get_proc_cpu(pid):
     """
@@ -97,6 +100,7 @@ def get_proc_cpu(pid):
         # 获取的结果不包含数据，或者无法识别cpu_utilization
         return None
     return cpu_utilization
+
 
 def get_proc_mem(pid, type="rss"):
     """
@@ -170,12 +174,14 @@ class HealthCheck(object):
         self.mail_config = None
         self.wechat_config = None
         self.dingding_config = None
+        self.feishu_config = None
         self.supervisord_url = 'unix:///var/run/supervisor.sock'
 
         if 'config' in config:
             self.mail_config = config['config'].get('mail')
             self.wechat_config = config['config'].get('wechat')
             self.dingding_config = config['config'].get('dingding')
+            self.feishu_config = config['config'].get('feishu')
             self.supervisord_url = config['config'].get('supervisordUrl', self.supervisord_url)
             self.supervisord_user = config['config'].get('supervisordUser', None)
             self.supervisord_pass = config['config'].get('supervisordPass', None)
@@ -184,7 +190,7 @@ class HealthCheck(object):
         self.program_config = config
 
         # 只保留通知action
-        self.notice_action = ['email', 'wechat', 'dingding']
+        self.notice_action = ['email', 'wechat', 'dingding', 'feishu']
 
         self.periodSeconds = 5
         self.failureThreshold = 3
@@ -516,17 +522,17 @@ class HealthCheck(object):
 
         if 'restart' in action_list:
             restart_result = self.action_supervisor_restart(program)
-            msg += '\r\n Restart：%s' % restart_result
+            msg += '\r\n**Restart**：%s' % restart_result
         elif 'exec' in action_list:
             action_exec_cmd = config.get('action_exec_cmd')
             exec_result = self.action_exec(program, action_exec_cmd)
-            msg += '\r\n Exec：%s' % exec_result
+            msg += '\r\n**Exec**：%s' % exec_result
         elif 'kill' in action_list:
             pid_get = config.get('pidGet', 'supervisor')
             pid_file = config.get('pidFile', )
             pid, err = self.get_pid(program, pid_get, pid_file)
             kill_result = self.action_kill(program, pid)
-            msg += '\r\n Kill：%s' % kill_result
+            msg += '\r\n**Kill**：%s' % kill_result
 
         if 'email' in action_list and self.mail_config:
             self.action_email(program, action_type, msg, check_status)
@@ -534,6 +540,8 @@ class HealthCheck(object):
             self.action_wechat(program, action_type, msg, check_status)
         if 'dingding' in action_list and self.dingding_config:
             self.action_dingding(program, action_type, msg, check_status)
+        if 'feishu' in action_list and self.feishu_config:
+            self.action_feishu(program, action_type, msg, check_status)
 
     def action_supervisor_restart(self, program):
         """
@@ -710,6 +718,7 @@ class HealthCheck(object):
         }
 
         access_token_url = '/cgi-bin/gettoken?corpid={id}&corpsecret={crt}'.format(id=corpid, crt=secret)
+
         try:
             httpClient = httplib.HTTPSConnection(host, timeout=10)
             httpClient.request("GET", access_token_url, headers=headers)
@@ -806,13 +815,14 @@ class HealthCheck(object):
         else:
             title = "[%s] Health check failed" % program
 
-        data = {"msgtype": "markdown",
-                     "markdown": {
-                         "title": title,
-                         "text": "#### 详情信息: \n> Program：%s \n\n> DataTime: %s \n\n> Hostname: %s \n\n> Platfrom: %s \n\n> Msg：%s" % (
-                         program, curr_dt, hostname, system_platform, msg)
-                     }
-                     }
+        data = {
+            "msgtype": "markdown",
+            "markdown": {
+                "title": title,
+                "text": "#### 详情信息: \n> Program：%s \n\n> DataTime: %s \n\n> Hostname: %s \n\n> Platfrom: %s \n\n> Msg：%s" % (
+                   program, curr_dt, hostname, system_platform, msg)
+            }
+        }
 
         try:
             httpClient = httplib.HTTPSConnection(host, timeout=10)
@@ -830,6 +840,125 @@ class HealthCheck(object):
                 httpClient.close()
 
         self.log(program, '[Action: dingding] send success')
+        return True
+
+    def action_feishu(self, program, action_type, msg, check_status):
+        """
+        飞书通知
+        :param program:
+        :param action_type:
+        :param msg:
+        :param check_status:
+        :return:
+        """
+        host = "open.feishu.cn"
+
+        secret = self.feishu_config.get('secret')
+        webhook = self.feishu_config.get('webhook')
+
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        send_url = "/open-apis/bot/v2/hook/{webhook}".format(webhook=webhook)
+
+        ip = ""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+        except Exception as e:
+            self.log(program, '[Action: feishu] get ip error %s' % e)
+        finally:
+            s.close()
+
+        hostname = platform.node().split('.')[0]
+        system_platform = platform.platform()
+
+        curr_dt = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        if check_status == 'success':
+            title = "[Supervisor] %s Health check successful" % program
+            title_color = "green"
+        else:
+            title = "[Supervisor] %s Health check failed" % program
+            title_color = "red"
+
+        content = "**DataTime**: {curr_dt}\n**Program**: {program}\n**IP**: {ip}\n**Hostname**: {hostname}\n**Platfrom**: {platfrom}\n**Action**: {action}\n**Msg**: {msg}".format(
+            curr_dt=curr_dt, program=program, ip=ip, hostname=hostname,
+            platfrom=system_platform, action=action_type, msg=msg)
+
+        data = {
+            "msg_type": "interactive",
+            "card": {
+                "config": {
+                    "wide_screen_mode": True,
+                    "enable_forward": True
+                },
+                "header": {
+                    "title": {
+                        "content": title,
+                        "tag": "plain_text"
+                    },
+                    "template": title_color
+                },
+                "elements": [{
+                    "tag": "div",
+                    "text": {
+                        "content": "详细信息:",
+                        "tag": "lark_md"
+                    },
+                    "fields": [
+                        {
+                            "is_short": False,
+                            "text": {
+                                "tag": "lark_md",
+                                "content": content
+                            }
+                        }]
+
+                }]
+
+            }
+        }
+
+        if secret != "":
+
+            msg = ""
+            timestamp = ""
+            if PY3:
+                timestamp = str(round(time.time()))
+                key = '{}\n{}'.format(timestamp, secret)
+                key_enc = key.encode('utf-8')
+                msg_enc = msg.encode('utf-8')
+            else:
+                print("python2")
+                timestamp = long(round(time.time()))
+                key = '{}\n{}'.format(timestamp, secret)
+                key_enc = bytes(key).encode('utf-8')
+                msg_enc = bytes(msg).encode('utf-8')
+
+            hmac_code = hmac.new(key_enc, msg_enc, digestmod=sha256).digest()
+            sign = base64.b64encode(hmac_code).decode('utf-8')
+            data['timestamp'] = timestamp
+            data['sign'] = sign
+            print(data)
+
+        httpClient = httplib.HTTPSConnection(host, timeout=10)
+        try:
+            httpClient.request("POST", send_url, json.dumps(data), headers=headers)
+            response = httpClient.getresponse()
+            result = json.loads(response.read())
+            if result.get('StatusCode', 1) != 0:
+                self.log(program, '[Action: feishu] send faild %s' % result)
+                return False
+        except Exception as e:
+            self.log(program, '[Action: feishu] send error [%s] %s' % (result, e))
+            return False
+        finally:
+            if httpClient:
+                httpClient.close()
+
+        self.log(program, '[Action: feishu] send success')
         return True
 
     def start(self):
@@ -900,7 +1029,10 @@ config:                                          # 脚本配置名称,请勿更�
 #    totag: 
 #  dingding:                                     # 钉钉通知配置
      access_token:
-
+#  feishu:                                       # 飞书通知配置
+     webhook:
+     secret:
+     
 # 内存方式监控
 cat1:                     # supervisor中配置的program名称
   type: mem               # 检查类型: http,tcp,mem,cpu  默认: http
@@ -912,9 +1044,9 @@ cat1:                     # supervisor中配置的program名称
   initialDelaySeconds: 10 # 首次检查等待的时间(以秒为单位), 默认: 1
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat,dingding,feishu (restart,exec,kill互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
-  sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
+  sendResolved: True      # 是否发送恢复通知 默认: False
 
 # cpu方式监控
 cat2:                     # supervisor中配置的program名称
@@ -926,9 +1058,9 @@ cat2:                     # supervisor中配置的program名称
   initialDelaySeconds: 10 # 首次检查等待的时间(以秒为单位), 默认: 1
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat,dingding,feishu (restart,exec,kill互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
-  sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
+  sendResolved: True      # 是否发送恢复通知 默认: False
 
 # HTTP方式监控
 cat3:
@@ -946,9 +1078,9 @@ cat3:
   timeoutSeconds: 5       # 检查超时的秒数, 默认: 3
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat,dingding,feishu (restart,exec,kill互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
-  sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
+  sendResolved: True      # 是否发送恢复通知 默认: False
 
 # TCP方式监控
 cat4:
@@ -960,9 +1092,9 @@ cat4:
   timeoutSeconds: 5       # 检查超时的秒数, 默认: 3
   failureThreshold: 3     # 检查成功后，最少连续检查失败多少次才被认定为失败, 默认: 3
   successThreshold: 2     # 失败后检查成功的最小连续成功次数, 默认：1
-  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat (restart和exec互斥,同时设置时restart生效) 默认: restart
+  action: restart,email   # 触发的动作: restart,exec,kill,email,wechat,dingding,feishu (restart,exec,kill互斥,同时设置时restart生效) 默认: restart
   execCmd: command        # action exec 的执行命令
-  sendResolved: True      # 是否发送恢复通知,仅用作于email,wechat. 默认: False
+  sendResolved: True      # 是否发送恢复通知 默认: False
 """
         with open(config_file, 'w') as f:
             f.write(example_config)
