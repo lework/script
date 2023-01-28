@@ -524,7 +524,7 @@ class HealthCheck(object):
             restart_result = self.action_supervisor_restart(program)
             msg += '\r\n**Restart**：%s' % restart_result
         elif 'exec' in action_list:
-            action_exec_cmd = config.get('action_exec_cmd')
+            action_exec_cmd = config.get('execCmd')
             exec_result = self.action_exec(program, action_exec_cmd)
             msg += '\r\n**Exec**：%s' % exec_result
         elif 'kill' in action_list:
@@ -712,26 +712,31 @@ class HealthCheck(object):
         touser = self.wechat_config.get('touser')
         toparty = self.wechat_config.get('toparty')
         totag = self.wechat_config.get('totag')
+        webhook = self.wechat_config.get('webhook')
 
         headers = {
             'Content-Type': 'application/json'
         }
 
-        access_token_url = '/cgi-bin/gettoken?corpid={id}&corpsecret={crt}'.format(id=corpid, crt=secret)
+        if corpid and secret and agentid:
+          access_token_url = '/cgi-bin/gettoken?corpid={id}&corpsecret={crt}'.format(id=corpid, crt=secret)
+  
+          try:
+              httpClient = httplib.HTTPSConnection(host, timeout=10)
+              httpClient.request("GET", access_token_url, headers=headers)
+              response = httpClient.getresponse()
+              token = json.loads(response.read())['access_token']
+          except Exception as e:
+              self.log(program, '[Action: wechat] get token error %s' % e)
+              return False
+          finally:
+              if httpClient:
+                  httpClient.close()
+  
+          send_url = '/cgi-bin/message/send?access_token={token}'.format(token=token)
 
-        try:
-            httpClient = httplib.HTTPSConnection(host, timeout=10)
-            httpClient.request("GET", access_token_url, headers=headers)
-            response = httpClient.getresponse()
-            token = json.loads(response.read())['access_token']
-        except Exception as e:
-            self.log(program, '[Action: wechat] get token error %s' % e)
-            return False
-        finally:
-            if httpClient:
-                httpClient.close()
-
-        send_url = '/cgi-bin/message/send?access_token={token}'.format(token=token)
+	if webhook:
+	  send_url = webhook.replace('https://qyapi.weixin.qq.com','')
 
         ip = ""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -766,11 +771,11 @@ class HealthCheck(object):
 
         data = {
             "msgtype": 'markdown',
-            "agentid": agentid,
-            "markdown": {'content': content},
-            "safe": 0
+            "markdown": {'content': content}
         }
 
+        if agentid:
+           data['agentid'] = agentid
         if touser:
             data['touser'] = touser
         if toparty:

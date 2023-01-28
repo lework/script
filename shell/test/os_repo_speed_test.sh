@@ -28,7 +28,7 @@ mirrors=(
   [edu_tsinghua]="https://mirrors.tuna.tsinghua.edu.cn/"
   [sohu]="http://mirrors.sohu.com/"
   [huawei]="https://mirrors.huaweicloud.com/"
-  [netease]="http://mirrors.cn99.com/"
+  [netease]="https://mirrors.163.com/"
   [tencent]="https://mirrors.cloud.tencent.com/"
   [aliyun]="https://mirrors.aliyun.com/"
 )
