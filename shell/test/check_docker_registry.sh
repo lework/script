@@ -46,10 +46,14 @@ REGISTRIES=(
     "https://dockerpull.pw"
     "https://doublezonline.cloud"
     "https://hub.fast360.xyz"
-    "https://hub.rat.dev"
     "https://hub.xdark.top"
     "https://image.cloudlayer.icu"
     "https://lispy.org"
+    "https://registry.cyou"
+    "https://docker.ameke.cn"
+    "https://docker.aeko.cn"
+    "https://docker.zhkugh.top"
+    "https://docker-mirror.aigc2d.com"
 )
 
 # 检测系统环境
@@ -128,37 +132,117 @@ check_registry() {
     return 1
 }
 
-# 测试Docker pull性能
+# 测试Registry性能
 test_registry_performance() {
     local registry_url="$1"
-    local test_image="debian:stable-slim"
+    local total_score=0
+    local test_count=0
     
-    log_info "测试 $registry_url 的拉取性能..."
+    log_info "测试 $registry_url 的性能..."
     
-    # 创建临时配置
-    local temp_daemon_config="/tmp/daemon_test_$$.json"
-    cat > "$temp_daemon_config" << EOF
-{
-    "registry-mirrors": ["$registry_url"]
-}
-EOF
-    
-    # 测试拉取时间
-    local start_time=$(date +%s)
-    
-    # 使用临时配置测试（仅作为参考，实际可能需要重启docker服务）
-    if timeout 30 docker pull "$test_image" > /dev/null 2>&1; then
-        local end_time=$(date +%s)
-        local duration=$((end_time - start_time))
-        log_success "✓ $registry_url 性能测试通过 (耗时: ${duration}s)"
+    # 测试1: API响应时间
+    local api_start=$(date +%s%N)
+    if curl -s --connect-timeout 5 --max-time 10 "$registry_url/v2/" > /dev/null 2>&1; then
+        local api_end=$(date +%s%N)
+        local api_time=$(( (api_end - api_start) / 1000000 )) # 转换为毫秒
+        log_info "  API响应时间: ${api_time}ms"
         
-        # 清理测试镜像
-        docker rmi "$test_image" > /dev/null 2>&1 || true
-        rm -f "$temp_daemon_config"
-        return 0
+        # API响应时间评分 (越快越好，满分100)
+        local api_score=100
+        if [ $api_time -gt 1000 ]; then
+            api_score=50
+        elif [ $api_time -gt 500 ]; then
+            api_score=70
+        elif [ $api_time -gt 200 ]; then
+            api_score=90
+        fi
+        total_score=$((total_score + api_score))
+        test_count=$((test_count + 1))
+    else
+        log_warning "  API响应测试失败"
+        return 1
+    fi
+    
+    # 测试2: 获取热门镜像清单性能
+    local manifest_start=$(date +%s%N)
+    if curl -s --connect-timeout 5 --max-time 15 \
+        -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+        "$registry_url/v2/library/alpine/manifests/latest" > /dev/null 2>&1; then
+        local manifest_end=$(date +%s%N)
+        local manifest_time=$(( (manifest_end - manifest_start) / 1000000 ))
+        log_info "  镜像清单获取时间: ${manifest_time}ms"
+        
+        # 清单获取时间评分
+        local manifest_score=100
+        if [ $manifest_time -gt 3000 ]; then
+            manifest_score=50
+        elif [ $manifest_time -gt 1500 ]; then
+            manifest_score=70
+        elif [ $manifest_time -gt 800 ]; then
+            manifest_score=90
+        fi
+        total_score=$((total_score + manifest_score))
+        test_count=$((test_count + 1))
+    else
+        log_info "  镜像清单测试跳过 (可能不支持)"
+    fi
+    
+    # 测试3: 连接稳定性（多次ping测试）
+    local ping_success=0
+    local ping_total=0
+    local ping_time_sum=0
+    
+    for i in {1..3}; do
+        local ping_start=$(date +%s%N)
+        if curl -s --connect-timeout 3 --max-time 8 "$registry_url/v2/" > /dev/null 2>&1; then
+            local ping_end=$(date +%s%N)
+            local ping_time=$(( (ping_end - ping_start) / 1000000 ))
+            ping_success=$((ping_success + 1))
+            ping_time_sum=$((ping_time_sum + ping_time))
+        fi
+        ping_total=$((ping_total + 1))
+        sleep 0.5
+    done
+    
+    if [ $ping_success -gt 0 ]; then
+        local avg_ping_time=$((ping_time_sum / ping_success))
+        local stability_rate=$((ping_success * 100 / ping_total))
+        log_info "  连接稳定性: ${stability_rate}% (${ping_success}/${ping_total})"
+        log_info "  平均响应时间: ${avg_ping_time}ms"
+        
+        # 稳定性评分
+        local stability_score=$((stability_rate))
+        if [ $avg_ping_time -gt 1000 ]; then
+            stability_score=$((stability_score - 20))
+        elif [ $avg_ping_time -gt 500 ]; then
+            stability_score=$((stability_score - 10))
+        fi
+        
+        # 确保分数不为负
+        [ $stability_score -lt 0 ] && stability_score=0
+        
+        total_score=$((total_score + stability_score))
+        test_count=$((test_count + 1))
+    else
+        log_warning "  连接稳定性测试失败"
+        return 1
+    fi
+    
+    # 计算综合评分
+    if [ $test_count -gt 0 ]; then
+        local final_score=$((total_score / test_count))
+        log_info "  综合性能评分: ${final_score}/100"
+        
+        # 根据评分判断是否通过
+        if [ $final_score -ge 70 ]; then
+            log_success "✓ $registry_url 性能测试通过 (评分: ${final_score})"
+            return 0
+        else
+            log_warning "✗ $registry_url 性能测试未达标 (评分: ${final_score})"
+            return 1
+        fi
     else
         log_warning "✗ $registry_url 性能测试失败"
-        rm -f "$temp_daemon_config"
         return 1
     fi
 }
@@ -419,4 +503,4 @@ main() {
 trap 'log_error "脚本执行被中断"; exit 1' INT TERM
 
 # 执行主函数
-main "$@"
+main "$@" 
